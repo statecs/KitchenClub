@@ -3,59 +3,47 @@ import { useNavigate } from "react-router-dom";
 import { format, parseISO, isBefore, startOfDay } from "date-fns";
 import { sv } from "date-fns/locale";
 import { LogOut, CalendarPlus, Palette, List, Plus, Trash2, Ban, Check, CalendarDays, Archive, ArchiveRestore, ChevronDown } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import type { Tables } from "@/integrations/supabase/types";
+import type { Theme, Slot, Booking } from "@/types/db";
 import AdminCalendar from "@/components/AdminCalendar";
-
-type Theme = Tables<"party_themes">;
-type Slot = Tables<"available_slots">;
-type Booking = Tables<"bookings">;
 
 type Tab = "calendar" | "bookings" | "slots" | "themes";
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { isAdmin, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("calendar");
   const [loading, setLoading] = useState(true);
 
   // Data
   const [themes, setThemes] = useState<Theme[]>([]);
-  const [slots, setSlots] = useState<(Slot & { party_themes?: Theme | null })[]>([]);
-  const [bookings, setBookings] = useState<(Booking & { available_slots?: Slot | null; party_themes?: Theme | null })[]>([]);
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
 
-  // Check auth
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { navigate("/admin/login"); return; }
-      const { data } = await supabase.rpc("has_role", { _user_id: user.id, _role: "admin" });
-      if (!data) { navigate("/admin/login"); return; }
-      setLoading(false);
-      fetchAll();
-    };
-    checkAuth();
-  }, []);
+    if (!isAdmin) {
+      navigate("/admin/login");
+      return;
+    }
+    fetchAll().finally(() => setLoading(false));
+  }, [isAdmin]);
 
   const fetchAll = async () => {
     const [t, s, b] = await Promise.all([
-      supabase.from("party_themes").select("*").order("sort_order"),
-      supabase.from("available_slots").select("*, party_themes(*)").order("date").order("start_time"),
-      supabase.from("bookings").select("*, available_slots(*), party_themes(*)").order("created_at", { ascending: false }),
+      api.get<Theme[]>('/themes/all'),
+      api.get<Slot[]>('/slots/all'),
+      api.get<Booking[]>('/bookings'),
     ]);
-    if (t.data) setThemes(t.data);
-    if (s.data) setSlots(s.data as any);
-    if (b.data) setBookings(b.data as any);
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/admin/login");
+    setThemes(t);
+    setSlots(s);
+    setBookings(b);
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center font-body text-muted-foreground">Laddar...</div>;
@@ -66,7 +54,7 @@ const AdminDashboard = () => {
       <div className="bg-card border-b border-border sticky top-0 z-40">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <h1 className="font-display text-lg font-bold text-foreground">Kitchen Club Admin</h1>
-          <Button variant="ghost" size="sm" onClick={handleLogout}>
+          <Button variant="ghost" size="sm" onClick={logout}>
             <LogOut className="w-4 h-4 mr-1" /> Logga ut
           </Button>
         </div>
@@ -102,22 +90,30 @@ const AdminDashboard = () => {
 };
 
 // ——— Bookings Tab ———
-const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () => void }) => {
+const BookingsTab = ({ bookings, onRefresh }: { bookings: Booking[]; onRefresh: () => void }) => {
   const { toast } = useToast();
   const [filter, setFilter] = useState("");
   const [showPast, setShowPast] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
   const updateStatus = async (id: string, status: "confirmed" | "cancelled") => {
-    const { error } = await supabase.from("bookings").update({ status }).eq("id", id);
-    if (error) toast({ title: "Fel", description: error.message, variant: "destructive" });
-    else { toast({ title: status === "confirmed" ? "Bekräftad" : "Avbokad" }); onRefresh(); }
+    try {
+      await api.put(`/bookings/${id}`, { status });
+      toast({ title: status === "confirmed" ? "Bekräftad" : "Avbokad" });
+      onRefresh();
+    } catch (err: unknown) {
+      toast({ title: "Fel", description: err instanceof Error ? err.message : "Fel", variant: "destructive" });
+    }
   };
 
   const toggleArchive = async (id: string, archived: boolean) => {
-    const { error } = await supabase.from("bookings").update({ is_archived: !archived } as any).eq("id", id);
-    if (error) toast({ title: "Fel", description: error.message, variant: "destructive" });
-    else { toast({ title: !archived ? "Arkiverad" : "Återställd" }); onRefresh(); }
+    try {
+      await api.put(`/bookings/${id}`, { is_archived: !archived });
+      toast({ title: !archived ? "Arkiverad" : "Återställd" });
+      onRefresh();
+    } catch (err: unknown) {
+      toast({ title: "Fel", description: err instanceof Error ? err.message : "Fel", variant: "destructive" });
+    }
   };
 
   const filtered = bookings.filter((b) =>
@@ -129,11 +125,11 @@ const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () =
   const today = startOfDay(new Date());
 
   const { active, past, archived } = useMemo(() => {
-    const active: any[] = [];
-    const past: any[] = [];
-    const archived: any[] = [];
+    const active: Booking[] = [];
+    const past: Booking[] = [];
+    const archived: Booking[] = [];
     for (const b of filtered) {
-      if ((b as any).is_archived) {
+      if (b.is_archived) {
         archived.push(b);
       } else if (b.available_slots?.date && isBefore(parseISO(b.available_slots.date), today)) {
         past.push(b);
@@ -144,7 +140,7 @@ const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () =
     return { active, past, archived };
   }, [filtered, today]);
 
-  const BookingCard = ({ b, showArchiveAction = true }: { b: any; showArchiveAction?: boolean }) => (
+  const BookingCard = ({ b, showArchiveAction = true }: { b: Booking; showArchiveAction?: boolean }) => (
     <div key={b.id} className="bg-card border border-border rounded-xl p-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -188,8 +184,8 @@ const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () =
           </>
         )}
         {showArchiveAction && (
-          <Button size="sm" variant="ghost" onClick={() => toggleArchive(b.id, (b as any).is_archived)}>
-            {(b as any).is_archived ? (
+          <Button size="sm" variant="ghost" onClick={() => toggleArchive(b.id, b.is_archived)}>
+            {b.is_archived ? (
               <><ArchiveRestore className="w-3 h-3 mr-1" /> Återställ</>
             ) : (
               <><Archive className="w-3 h-3 mr-1" /> Arkivera</>
@@ -203,7 +199,7 @@ const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () =
   return (
     <div className="space-y-4">
       <Input placeholder="Sök namn eller datum..." value={filter} onChange={(e) => setFilter(e.target.value)} className="max-w-xs" />
-      
+
       {active.length === 0 && past.length === 0 && archived.length === 0 && (
         <p className="font-body text-sm text-muted-foreground">Inga bokningar hittades.</p>
       )}
@@ -260,7 +256,7 @@ const BookingsTab = ({ bookings, onRefresh }: { bookings: any[]; onRefresh: () =
 };
 
 // ——— Slots Tab ———
-const SlotsTab = ({ slots, themes, onRefresh }: { slots: any[]; themes: Theme[]; onRefresh: () => void }) => {
+const SlotsTab = ({ slots, themes, onRefresh }: { slots: Slot[]; themes: Theme[]; onRefresh: () => void }) => {
   const { toast } = useToast();
   const [date, setDate] = useState("");
   const [startTime, setStartTime] = useState("10:00");
@@ -269,22 +265,28 @@ const SlotsTab = ({ slots, themes, onRefresh }: { slots: any[]; themes: Theme[];
 
   const addSlot = async () => {
     if (!date || !themeId) { toast({ title: "Fyll i alla fält", variant: "destructive" }); return; }
-    const { error } = await supabase.from("available_slots").insert({
-      date, start_time: startTime, end_time: endTime, theme_id: themeId,
-    });
-    if (error) toast({ title: "Fel", description: error.message, variant: "destructive" });
-    else { toast({ title: "Tid tillagd" }); setDate(""); onRefresh(); }
+    try {
+      await api.post('/slots', { date, start_time: startTime, end_time: endTime, theme_id: themeId });
+      toast({ title: "Tid tillagd" });
+      setDate("");
+      onRefresh();
+    } catch (err: unknown) {
+      toast({ title: "Fel", description: err instanceof Error ? err.message : "Fel", variant: "destructive" });
+    }
   };
 
   const toggleBlock = async (id: string, blocked: boolean) => {
-    await supabase.from("available_slots").update({ is_blocked: !blocked }).eq("id", id);
+    await api.put(`/slots/${id}`, { is_blocked: !blocked });
     onRefresh();
   };
 
   const deleteSlot = async (id: string) => {
-    const { error } = await supabase.from("available_slots").delete().eq("id", id);
-    if (error) toast({ title: "Fel", description: error.message, variant: "destructive" });
-    else onRefresh();
+    try {
+      await api.delete(`/slots/${id}`);
+      onRefresh();
+    } catch (err: unknown) {
+      toast({ title: "Fel", description: err instanceof Error ? err.message : "Fel", variant: "destructive" });
+    }
   };
 
   return (
@@ -328,7 +330,7 @@ const SlotsTab = ({ slots, themes, onRefresh }: { slots: any[]; themes: Theme[];
 
       {/* List */}
       <div className="space-y-2">
-        {slots.map((s: any) => (
+        {slots.map((s) => (
           <div key={s.id} className={`flex items-center justify-between p-3 rounded-lg border ${s.is_blocked ? "bg-muted/50 border-destructive/30" : "bg-card border-border"}`}>
             <div className="font-body text-sm">
               <span className="font-medium">{s.date ? format(new Date(s.date), "d MMM yyyy", { locale: sv }) : ""}</span>
@@ -392,20 +394,22 @@ const ThemesTab = ({ themes, onRefresh }: { themes: Theme[]; onRefresh: () => vo
 
   const save = async () => {
     if (!form.name || !form.description) { toast({ title: "Fyll i namn och beskrivning", variant: "destructive" }); return; }
-    const payload = formToPayload() as any;
-    if (editing) {
-      const { error } = await supabase.from("party_themes").update(payload).eq("id", editing);
-      if (error) { toast({ title: "Fel vid sparning", description: error.message, variant: "destructive" }); return; }
-      toast({ title: "Tema uppdaterat" });
-    } else {
-      const { error } = await supabase.from("party_themes").insert({ ...payload, sort_order: themes.length + 1 } as any);
-      if (error) { toast({ title: "Fel vid skapande", description: error.message, variant: "destructive" }); return; }
-      toast({ title: "Tema tillagt" });
+    const payload = formToPayload();
+    try {
+      if (editing) {
+        await api.put(`/themes/${editing}`, payload);
+        toast({ title: "Tema uppdaterat" });
+      } else {
+        await api.post('/themes', { ...payload, sort_order: themes.length + 1 });
+        toast({ title: "Tema tillagt" });
+      }
+      setEditing(null);
+      resetForm();
+      setShowForm(false);
+      onRefresh();
+    } catch (err: unknown) {
+      toast({ title: "Fel vid sparning", description: err instanceof Error ? err.message : "Fel", variant: "destructive" });
     }
-    setEditing(null);
-    resetForm();
-    setShowForm(false);
-    onRefresh();
   };
 
   const startEdit = (t: Theme) => {
@@ -416,17 +420,17 @@ const ThemesTab = ({ themes, onRefresh }: { themes: Theme[]; onRefresh: () => vo
       name: t.name,
       description: t.description,
       long_description: t.long_description || "",
-      includes: (t as any).includes?.join("\n") || "",
-      addons: (t as any).addons?.join("\n") || "",
-      price_text: (t as any).price_text || "465 kr/barn",
-      details_text: (t as any).details_text || "Minst 12 barn · 2 timmar",
+      includes: t.includes?.join("\n") || "",
+      addons: t.addons?.join("\n") || "",
+      price_text: t.price_text || "465 kr/barn",
+      details_text: t.details_text || "Minst 12 barn · 2 timmar",
       allergy_notes: t.allergy_notes || "",
-      cancellation_text: (t as any).cancellation_text || "",
+      cancellation_text: t.cancellation_text || "",
     });
   };
 
   const toggleActive = async (id: string, active: boolean) => {
-    await supabase.from("party_themes").update({ is_active: !active }).eq("id", id);
+    await api.put(`/themes/${id}`, { is_active: !active });
     onRefresh();
   };
 
@@ -522,7 +526,7 @@ const ThemesTab = ({ themes, onRefresh }: { themes: Theme[]; onRefresh: () => vo
             <div className="min-w-0 flex-1">
               <p className="font-body text-sm font-semibold">{t.emoji} {t.name}</p>
               <p className="font-body text-xs text-muted-foreground truncate">{t.description}</p>
-              <p className="font-body text-xs text-muted-foreground mt-0.5">{(t as any).price_text} · {(t as any).details_text}</p>
+              <p className="font-body text-xs text-muted-foreground mt-0.5">{t.price_text} · {t.details_text}</p>
             </div>
             <div className="flex gap-1 shrink-0">
               <Button variant="ghost" size="sm" onClick={() => startEdit(t)}>Redigera</Button>

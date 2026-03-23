@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 const AdminLogin = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { login, signup } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -19,39 +21,24 @@ const AdminLogin = () => {
     setLoading(true);
     try {
       if (mode === "forgot") {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/reset-password`,
-        });
-        if (error) throw error;
+        await api.post('/auth/reset-password', { email });
         toast({ title: "E-post skickad", description: "Kolla din inkorg för att återställa lösenordet." });
         setMode("login");
         return;
       }
 
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) throw signInError;
+        await signup(email, password);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Ingen användare hittades");
-
-      const { data: roleData } = await supabase.rpc("has_role", { _user_id: user.id, _role: "admin" });
-      if (!roleData) {
-        await supabase.auth.signOut();
-        throw new Error("Du har inte admin-behörighet");
+        await login(email, password);
       }
 
       navigate("/admin");
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Något gick fel";
       toast({
         title: mode === "signup" ? "Registrering misslyckades" : "Inloggning misslyckades",
-        description: err.message,
+        description: message,
         variant: "destructive",
       });
     } finally {

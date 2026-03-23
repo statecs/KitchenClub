@@ -4,16 +4,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { format, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isBefore, startOfDay } from "date-fns";
 import { sv } from "date-fns/locale";
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Users, Minus, Plus, Info, X } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import type { Tables } from "@/integrations/supabase/types";
-
-type Theme = Tables<"party_themes">;
-type Slot = Tables<"available_slots"> & { booking_count?: number };
+import type { Theme, Slot } from "@/types/db";
 
 const PRICES = {
   basePerChild: 465,
@@ -56,35 +53,17 @@ const BookingPage = () => {
   }, []);
 
   const fetchThemes = async () => {
-    const { data } = await supabase.from("party_themes").select("*").eq("is_active", true).order("sort_order");
-    if (data) {
-      setThemes(data);
-      // Pre-select theme from URL query param
-      const preselectedTheme = searchParams.get("theme");
-      if (preselectedTheme && data.some((t) => t.id === preselectedTheme)) {
-        setSelectedThemeFilters(new Set([preselectedTheme]));
-      }
+    const data = await api.get<Theme[]>('/themes');
+    setThemes(data);
+    const preselectedTheme = searchParams.get("theme");
+    if (preselectedTheme && data.some((t) => t.id === preselectedTheme)) {
+      setSelectedThemeFilters(new Set([preselectedTheme]));
     }
   };
 
   const fetchSlots = async () => {
-    const { data } = await supabase
-      .from("available_slots")
-      .select("*")
-      .gte("date", format(new Date(), "yyyy-MM-dd"))
-      .eq("is_blocked", false)
-      .order("date")
-      .order("start_time");
-    if (data) {
-      // Get booking counts
-      const slotsWithCounts = await Promise.all(
-        data.map(async (slot) => {
-          const { data: count } = await supabase.rpc("get_slot_booking_count", { slot_uuid: slot.id });
-          return { ...slot, booking_count: count ?? 0 };
-        })
-      );
-      setSlots(slotsWithCounts);
-    }
+    const data = await api.get<Slot[]>('/slots');
+    setSlots(data);
   };
 
   const daysInMonth = useMemo(() => {
@@ -139,7 +118,7 @@ const BookingPage = () => {
       const bookingId = crypto.randomUUID();
 
       // 1. Create the booking (stays pending until paid)
-      const { error } = await supabase.from("bookings").insert({
+      await api.post('/bookings', {
         id: bookingId,
         slot_id: selectedSlot.id,
         theme_id: selectedSlot.theme_id!,
@@ -156,37 +135,31 @@ const BookingPage = () => {
         total_price: totalPrice,
       });
 
-      if (error) throw error;
-
       // 2. Create Stripe Checkout session
       const origin = window.location.origin;
-      const { data: checkoutData, error: checkoutError } = await supabase.functions.invoke("create-checkout-session", {
-        body: {
-          bookingId,
-          contactName,
-          contactEmail,
-          totalPrice,
-          themeName: selectedTheme?.name ?? "",
-          themeEmoji: selectedTheme?.emoji ?? "",
-          childName,
-          date: selectedSlot.date,
-          startTime: selectedSlot.start_time?.slice(0, 5),
-          endTime: selectedSlot.end_time?.slice(0, 5),
-          successUrl: `${origin}/boka/tack?session_id={CHECKOUT_SESSION_ID}`,
-          cancelUrl: `${origin}/boka?cancelled=true`,
-        },
+      const { url } = await api.post<{ url: string }>('/stripe/checkout', {
+        bookingId,
+        contactName,
+        contactEmail,
+        totalPrice,
+        themeName: selectedTheme?.name ?? "",
+        themeEmoji: selectedTheme?.emoji ?? "",
+        childName,
+        date: selectedSlot.date,
+        startTime: selectedSlot.start_time?.slice(0, 5),
+        endTime: selectedSlot.end_time?.slice(0, 5),
+        successUrl: `${origin}/boka/tack?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${origin}/boka?cancelled=true`,
       });
 
-      if (checkoutError) throw checkoutError;
-
-      const { url } = checkoutData;
       if (url) {
         window.location.href = url;
       } else {
         throw new Error("Ingen checkout-URL mottagen");
       }
-    } catch (err: any) {
-      toast({ title: "Något gick fel", description: err.message, variant: "destructive" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Något gick fel";
+      toast({ title: "Något gick fel", description: message, variant: "destructive" });
     } finally {
       setSubmitting(false);
     }

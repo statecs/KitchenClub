@@ -1,36 +1,15 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Cake, ChevronDown, X } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-
-interface PartyTheme {
-  id: string;
-  emoji: string;
-  name: string;
-  description: string;
-  long_description: string | null;
-  includes: string[];
-  addons: string[];
-  price_text: string | null;
-  details_text: string | null;
-  allergy_notes: string | null;
-  cancellation_text: string | null;
-}
+import { api } from "@/lib/api";
+import type { Theme } from "@/types/db";
 
 const ChildrenSection = () => {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-  const [themes, setThemes] = useState<PartyTheme[]>([]);
+  const [themes, setThemes] = useState<Theme[]>([]);
 
   useEffect(() => {
-    const fetch = async () => {
-      const { data } = await supabase
-        .from("party_themes")
-        .select("id, emoji, name, description, long_description, includes, addons, price_text, details_text, allergy_notes, cancellation_text")
-        .eq("is_active", true)
-        .order("sort_order");
-      if (data) setThemes(data as PartyTheme[]);
-    };
-    fetch();
+    api.get<Theme[]>('/themes').then(setThemes).catch(console.error);
   }, []);
 
   const toggle = (i: number) =>
