@@ -1,7 +1,6 @@
 import ServiceCard from "./ServiceCard";
 import kidsCooking from "@/assets/kids-cooking.jpg";
 import adultsCooking from "@/assets/adults-cooking.jpg";
-import foodEvent from "@/assets/food-event.jpg";
 import { motion } from "framer-motion";
 
 const services = [
@@ -16,7 +15,7 @@ const services = [
     description: "Utforska nya smaker och tekniker i våra inspirerande kurser för vuxna. Från nybörjare till avancerad.",
   },
   {
-    image: foodEvent,
+    image: "/images/food-event.jpg",
     title: "Matevenemang",
     description: "Perfekt för företag och privata grupper. Teambuilding, fester och unika matupplevelser.",
   },

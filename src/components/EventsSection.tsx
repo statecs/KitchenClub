@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { Building2, Rocket, PartyPopper, Heart, Gift, Users } from "lucide-react";
-import foodEvent from "@/assets/food-event.jpg";
 
 const eventTypes = [
   { icon: Building2, title: "Teambuilding", desc: "Stärk samarbetet genom matlagning i lag." },
@@ -44,7 +43,7 @@ const EventsSection = () => {
           >
             <div className="aspect-[21/9] overflow-hidden">
               <img
-                src={foodEvent}
+                src="/images/food-event.jpg"
                 alt="Matevenemang för grupper"
                 className="w-full h-full object-cover"
               />
